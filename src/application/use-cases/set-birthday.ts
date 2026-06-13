@@ -1,0 +1,45 @@
+import type { BirthDate } from "../../domain/birth-date.ts";
+import { nextOccurrenceUtc } from "../../domain/next-occurrence.ts";
+import type { Timezone } from "../../domain/timezone.ts";
+import type {
+	AuditLogPublisher,
+	AuditSource,
+} from "../ports/audit-log-publisher.ts";
+import type { BirthdayRepository } from "../ports/birthday-repository.ts";
+import type { Clock } from "../ports/clock.ts";
+
+export interface SetBirthdayResult {
+	created: boolean;
+}
+
+export class SetBirthdayUseCase {
+	constructor(
+		private readonly repo: BirthdayRepository,
+		private readonly auditLog: AuditLogPublisher,
+		private readonly clock: Clock,
+	) {}
+
+	async execute(
+		userId: string,
+		birthDate: BirthDate,
+		timezone: Timezone,
+		source: AuditSource,
+	): Promise<SetBirthdayResult> {
+		const now = this.clock.nowUtcMillis();
+		const existing = this.repo.findByUserId(userId);
+		const nextTriggerAtUtc = nextOccurrenceUtc(birthDate, timezone, now);
+
+		this.repo.upsert({ userId, birthDate, timezone, nextTriggerAtUtc, now });
+
+		const action = existing === null ? "add" : "update";
+		await this.auditLog.publish({
+			action,
+			source,
+			userId,
+			birthDate: birthDate.formatWithYear(),
+			timezone: timezone.ianaId,
+		});
+
+		return { created: existing === null };
+	}
+}
