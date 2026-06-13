@@ -13,6 +13,8 @@
 		"typecheck": "tsc --noEmit",
 		"codecheck": "bunx biome check .",
 		"codecheck:fix": "bunx biome check --fix .",
+		"prod:up": "docker compose up --build -d",
+		"prod:down": "docker compose down",
 		"test": "bun test"
 	},
 	"devDependencies": {
