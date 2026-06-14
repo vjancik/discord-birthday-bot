@@ -233,6 +233,32 @@ describe("SetBirthdayUseCase", () => {
 		expect(record?.lastBirthDateChangeAtUtc).toBe(afterFirst); // unchanged
 	});
 
+	test("forwards userName to audit event on creation", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+		await useCase.execute("123", bd, tz, "discord", "Vix (@coolvix)");
+
+		expect(auditLog.events[0]?.userName).toBe("Vix (@coolvix)");
+	});
+
+	test("forwards userName to update_rejected audit event", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd1 = BirthDate.parse("01.01.", null);
+		const bd2 = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		await useCase.execute("123", bd1, tz, "discord", "Vix (@coolvix)");
+		auditLog.events.length = 0;
+
+		await useCase
+			.execute("123", bd2, tz, "discord", "Vix (@coolvix)")
+			.catch(() => undefined);
+
+		expect(auditLog.events[0]?.action).toBe("update_rejected");
+		expect(auditLog.events[0]?.userName).toBe("Vix (@coolvix)");
+	});
+
 	test("cooldown: birth date change allowed after 14 days", async () => {
 		const FOURTEEN_DAYS_LATER = NOW + 14 * 24 * 60 * 60 * 1000 + 1;
 		const bd1 = BirthDate.parse("01.01.", null);

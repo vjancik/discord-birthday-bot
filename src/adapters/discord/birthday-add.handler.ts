@@ -11,6 +11,7 @@ import type { Logger } from "pino";
 import type { GetBirthdayUseCase } from "../../application/use-cases/get-birthday.ts";
 import type { SetBirthdayUseCase } from "../../application/use-cases/set-birthday.ts";
 import { AppError } from "../../domain/errors.ts";
+import { formatUserName } from "../../infrastructure/discord/format-user-name.ts";
 import { buildBirthdayModal, parseModalSubmit } from "./birthday-modal.ts";
 import {
 	birthdayAddModalId,
@@ -117,11 +118,16 @@ export class BirthdayAddHandler {
 
 		try {
 			const { birthDate, timezone } = parseModalSubmit(submitInteraction);
+			const userName = formatUserName(
+				triggerInteraction.user.globalName,
+				triggerInteraction.user.username,
+			);
 			const result = await this.setBirthday.execute(
 				userId,
 				birthDate,
 				timezone,
 				"discord",
+				userName,
 			);
 
 			const action = result.created ? "set" : "updated";

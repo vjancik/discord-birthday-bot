@@ -5,6 +5,7 @@ export interface AuditEvent {
 	action: AuditAction;
 	source: AuditSource;
 	userId: string;
+	userName?: string;
 	birthDate?: string;
 	timezone?: string;
 }

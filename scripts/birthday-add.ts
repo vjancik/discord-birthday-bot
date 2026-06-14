@@ -8,6 +8,7 @@ import { createDb } from "../src/infrastructure/db/client.ts";
 import { DrizzleBirthdayRepository } from "../src/infrastructure/db/drizzle-birthday-repository.ts";
 import { NullAuditLogPublisher } from "../src/infrastructure/discord/null-audit-log-publisher.ts";
 import { RestAuditLogPublisher } from "../src/infrastructure/discord/rest-audit-log-publisher.ts";
+import { RestUserNameResolver } from "../src/infrastructure/discord/rest-user-name-resolver.ts";
 import { createLogger } from "../src/infrastructure/logging/logger.ts";
 import { SystemClock } from "../src/infrastructure/system-clock.ts";
 
@@ -50,11 +51,17 @@ try {
 	const repo = new DrizzleBirthdayRepository(db);
 	const auditLog = noDiscord
 		? new NullAuditLogPublisher()
-		: new RestAuditLogPublisher(
-				new REST({ version: "10" }).setToken(config.discordToken),
-				config.logChannelId,
-				logger,
-			);
+		: (() => {
+				const discordRest = new REST({ version: "10" }).setToken(
+					config.discordToken,
+				);
+				return new RestAuditLogPublisher(
+					discordRest,
+					config.logChannelId,
+					logger,
+					new RestUserNameResolver(discordRest),
+				);
+			})();
 	const clock = new SystemClock();
 	const useCase = new SetBirthdayUseCase(repo, auditLog, clock);
 

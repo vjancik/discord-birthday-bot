@@ -27,6 +27,7 @@ export class SetBirthdayUseCase {
 		birthDate: BirthDate,
 		timezone: Timezone,
 		source: AuditSource,
+		userName?: string,
 	): Promise<SetBirthdayResult> {
 		const now = this.clock.nowUtcMillis();
 		const existing = this.repo.findByUserId(userId);
@@ -45,6 +46,7 @@ export class SetBirthdayUseCase {
 				action: "update_rejected",
 				source,
 				userId,
+				userName,
 				birthDate: birthDate.formatWithYear(),
 				timezone: timezone.ianaId,
 			});
@@ -73,6 +75,7 @@ export class SetBirthdayUseCase {
 			action,
 			source,
 			userId,
+			userName,
 			birthDate: birthDate.formatWithYear(),
 			timezone: timezone.ianaId,
 		});

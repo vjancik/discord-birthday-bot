@@ -10,6 +10,7 @@ import type { Logger } from "pino";
 import type { GetBirthdayUseCase } from "../../application/use-cases/get-birthday.ts";
 import type { RemoveBirthdayUseCase } from "../../application/use-cases/remove-birthday.ts";
 import { BirthdayNotFoundError } from "../../domain/errors.ts";
+import { formatUserName } from "../../infrastructure/discord/format-user-name.ts";
 import { birthdayRemoveNoId, birthdayRemoveYesId } from "./custom-ids.ts";
 
 export class BirthdayRemoveHandler {
@@ -78,7 +79,11 @@ export class BirthdayRemoveHandler {
 		}
 
 		try {
-			await this.removeBirthday.execute(userId, "discord");
+			const userName = formatUserName(
+				interaction.user.globalName,
+				interaction.user.username,
+			);
+			await this.removeBirthday.execute(userId, "discord", userName);
 			await buttonInteraction.update({
 				content: "Your birthday has been removed.",
 				components: [],

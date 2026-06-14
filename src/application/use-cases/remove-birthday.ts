@@ -11,7 +11,11 @@ export class RemoveBirthdayUseCase {
 		private readonly auditLog: AuditLogPublisher,
 	) {}
 
-	async execute(userId: string, source: AuditSource): Promise<void> {
+	async execute(
+		userId: string,
+		source: AuditSource,
+		userName?: string,
+	): Promise<void> {
 		const existing = this.repo.findByUserId(userId);
 		if (existing === null) {
 			throw new BirthdayNotFoundError(userId);
@@ -23,6 +27,7 @@ export class RemoveBirthdayUseCase {
 			action: "remove",
 			source,
 			userId,
+			userName,
 		});
 	}
 }

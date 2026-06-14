@@ -4,17 +4,32 @@ import type {
 	AuditEvent,
 	AuditLogPublisher,
 } from "../../application/ports/audit-log-publisher.ts";
+import type { UserNameResolver } from "../../application/ports/user-name-resolver.ts";
 
 export class RestAuditLogPublisher implements AuditLogPublisher {
 	constructor(
 		private readonly rest: REST,
 		private readonly logChannelId: string,
 		private readonly logger: Logger,
+		private readonly nameResolver?: UserNameResolver,
 	) {}
 
 	async publish(event: AuditEvent): Promise<void> {
 		const action = event.action.toUpperCase();
-		const parts = [`[${action}] (${event.source}) user ${event.userId}`];
+
+		let name = event.userName;
+		if (name === undefined && this.nameResolver !== undefined) {
+			try {
+				name = (await this.nameResolver.resolve(event.userId)) ?? undefined;
+			} catch {
+				// resolver threw unexpectedly — fall back to bare id
+			}
+		}
+
+		const who =
+			name !== undefined ? `${name} [${event.userId}]` : `user ${event.userId}`;
+
+		const parts = [`[${action}] (${event.source}) ${who}`];
 		if (event.birthDate !== undefined)
 			parts.push(`birthday: ${event.birthDate}`);
 		if (event.timezone !== undefined) parts.push(`timezone: ${event.timezone}`);

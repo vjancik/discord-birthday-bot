@@ -19,6 +19,7 @@ import { DrizzleBirthdayRepository } from "./infrastructure/db/drizzle-birthday-
 import { RestAnnouncementPublisher } from "./infrastructure/discord/rest-announcement-publisher.ts";
 import { RestAuditLogPublisher } from "./infrastructure/discord/rest-audit-log-publisher.ts";
 import { RestMembershipChecker } from "./infrastructure/discord/rest-membership-checker.ts";
+import { RestUserNameResolver } from "./infrastructure/discord/rest-user-name-resolver.ts";
 import { validateChannels } from "./infrastructure/discord/startup-validation.ts";
 import { createLogger } from "./infrastructure/logging/logger.ts";
 import { MathRandomSource } from "./infrastructure/math-random-source.ts";
@@ -32,7 +33,13 @@ logger.info("Starting birthday bot...");
 const db = createDb(config.dbFilePath);
 const repo = new DrizzleBirthdayRepository(db);
 const rest = new REST({ version: "10" }).setToken(config.discordToken);
-const auditLog = new RestAuditLogPublisher(rest, config.logChannelId, logger);
+const nameResolver = new RestUserNameResolver(rest);
+const auditLog = new RestAuditLogPublisher(
+	rest,
+	config.logChannelId,
+	logger,
+	nameResolver,
+);
 const announcements = new RestAnnouncementPublisher(
 	rest,
 	config.birthdayPostChannelId,
