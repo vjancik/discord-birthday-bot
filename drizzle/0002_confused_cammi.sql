@@ -1,0 +1,1 @@
+ALTER TABLE `birthdays` ADD `removed_at` integer;

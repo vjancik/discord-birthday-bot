@@ -27,6 +27,7 @@ class InMemoryRepo implements BirthdayRepository {
 		nextTriggerAtUtc: number;
 		now: number;
 		lastBirthDateChangeAtUtc: number | null;
+		removedAt: number | null;
 	}): void {
 		const existing = this.records.get(params.userId);
 		this.records.set(params.userId, {
@@ -38,24 +39,27 @@ class InMemoryRepo implements BirthdayRepository {
 			nextTriggerAtUtc: params.nextTriggerAtUtc,
 			lastPostedAtUtc: existing?.lastPostedAtUtc ?? null,
 			lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
+			removedAt: params.removedAt,
 			createdAt: existing?.createdAt ?? params.now,
 			updatedAt: params.now,
 		});
 	}
 
-	delete(userId: string): void {
-		this.records.delete(userId);
+	delete(userId: string, now: number): void {
+		const r = this.records.get(userId);
+		if (r === undefined) return;
+		this.records.set(userId, { ...r, removedAt: now, updatedAt: now });
 	}
 
 	findDue(nowUtcMillis: number): BirthdayRecord[] {
 		return [...this.records.values()].filter(
-			(r) => r.nextTriggerAtUtc <= nowUtcMillis,
+			(r) => r.nextTriggerAtUtc <= nowUtcMillis && r.removedAt === null,
 		);
 	}
 
 	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null {
 		const upcoming = [...this.records.values()]
-			.filter((r) => r.nextTriggerAtUtc > nowUtcMillis)
+			.filter((r) => r.nextTriggerAtUtc > nowUtcMillis && r.removedAt === null)
 			.sort((a, b) => a.nextTriggerAtUtc - b.nextTriggerAtUtc);
 		return upcoming[0] ?? null;
 	}
@@ -279,5 +283,82 @@ describe("SetBirthdayUseCase", () => {
 		const record = repo.findByUserId("123");
 		expect(record?.day).toBe(24);
 		expect(record?.lastBirthDateChangeAtUtc).toBe(FOURTEEN_DAYS_LATER);
+	});
+
+	test("reactivation: re-adding same data after remove clears tombstone, created=true, no cooldown", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		// Add and immediately soft-delete via the repo (simulating RemoveBirthdayUseCase)
+		await useCase.execute("123", bd, tz, "discord");
+		const changeTime = repo.findByUserId("123")?.lastBirthDateChangeAtUtc;
+		repo.delete("123", NOW);
+
+		// Re-add same data within 14d — should succeed (reactivation, not a date change)
+		auditLog.events.length = 0;
+		const result = await useCase.execute("123", bd, tz, "discord");
+
+		expect(result.created).toBe(true);
+		const record = repo.findByUserId("123");
+		expect(record?.removedAt).toBeNull();
+		expect(record?.lastBirthDateChangeAtUtc).toBe(changeTime); // preserved
+		expect(auditLog.events[0]?.action).toBe("add");
+	});
+
+	test("reactivation: re-adding different data within 14d is rejected by cooldown", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd1 = BirthDate.parse("24.12.", null);
+		const bd2 = BirthDate.parse("01.01.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		await useCase.execute("123", bd1, tz, "discord");
+		repo.delete("123", NOW);
+
+		auditLog.events.length = 0;
+		await expect(
+			useCase.execute("123", bd2, tz, "discord"),
+		).rejects.toBeDefined();
+
+		// Record should remain tombstoned
+		const record = repo.findByUserId("123");
+		expect(record?.removedAt).toBe(NOW);
+		expect(auditLog.events[0]?.action).toBe("update_rejected");
+	});
+
+	test("reactivation: re-adding different data after 14d succeeds and reactivates", async () => {
+		const bd1 = BirthDate.parse("24.12.", null);
+		const bd2 = BirthDate.parse("01.01.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		const useCase1 = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		await useCase1.execute("123", bd1, tz, "discord");
+		repo.delete("123", NOW);
+
+		const AFTER = NOW + 14 * 24 * 60 * 60 * 1000 + 1;
+		const useCase2 = new SetBirthdayUseCase(repo, auditLog, fixedClock(AFTER));
+		const result = await useCase2.execute("123", bd2, tz, "discord");
+
+		expect(result.created).toBe(true);
+		const record = repo.findByUserId("123");
+		expect(record?.removedAt).toBeNull();
+		expect(record?.day).toBe(1);
+		expect(record?.lastBirthDateChangeAtUtc).toBe(AFTER);
+	});
+
+	test("reactivation: cli bypasses cooldown on re-add with changed data", async () => {
+		const bd1 = BirthDate.parse("24.12.", null);
+		const bd2 = BirthDate.parse("01.01.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		await useCase.execute("123", bd1, tz, "cli");
+		repo.delete("123", NOW);
+
+		const result = await useCase.execute("123", bd2, tz, "cli");
+		expect(result.created).toBe(true);
+		const record = repo.findByUserId("123");
+		expect(record?.removedAt).toBeNull();
+		expect(record?.day).toBe(1);
 	});
 });

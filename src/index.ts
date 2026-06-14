@@ -67,7 +67,7 @@ const membership =
 
 const setBirthday = new SetBirthdayUseCase(repo, auditLog, clock);
 const getBirthday = new GetBirthdayUseCase(repo);
-const removeBirthday = new RemoveBirthdayUseCase(repo, auditLog);
+const removeBirthday = new RemoveBirthdayUseCase(repo, auditLog, clock);
 const getNextBirthday = new GetNextBirthdayUseCase(repo, clock);
 const runDueBirthdays = new RunDueBirthdaysUseCase(
 	repo,

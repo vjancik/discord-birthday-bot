@@ -8,6 +8,7 @@ import { NullAuditLogPublisher } from "../src/infrastructure/discord/null-audit-
 import { RestAuditLogPublisher } from "../src/infrastructure/discord/rest-audit-log-publisher.ts";
 import { RestUserNameResolver } from "../src/infrastructure/discord/rest-user-name-resolver.ts";
 import { createLogger } from "../src/infrastructure/logging/logger.ts";
+import { SystemClock } from "../src/infrastructure/system-clock.ts";
 
 function printUsage(): void {
 	console.error(
@@ -54,7 +55,7 @@ try {
 					new RestUserNameResolver(discordRest),
 				);
 			})();
-	const useCase = new RemoveBirthdayUseCase(repo, auditLog);
+	const useCase = new RemoveBirthdayUseCase(repo, auditLog, new SystemClock());
 
 	await useCase.execute(userId, "cli");
 	console.log(`Removed birthday for user ${userId}.`);

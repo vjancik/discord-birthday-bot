@@ -11,6 +11,7 @@ export const birthdays = sqliteTable(
 		nextTriggerAtUtc: integer("next_trigger_at_utc").notNull(),
 		lastPostedAtUtc: integer("last_posted_at_utc"),
 		lastBirthDateChangeAtUtc: integer("last_birth_date_change_at_utc"),
+		removedAt: integer("removed_at"),
 		createdAt: integer("created_at").notNull(),
 		updatedAt: integer("updated_at").notNull(),
 	},

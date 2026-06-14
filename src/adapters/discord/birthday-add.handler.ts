@@ -8,16 +8,26 @@ import {
 	MessageFlags,
 } from "discord.js";
 import type { Logger } from "pino";
+import type { BirthdayRecord } from "../../application/ports/birthday-repository.ts";
 import type { GetBirthdayUseCase } from "../../application/use-cases/get-birthday.ts";
 import type { SetBirthdayUseCase } from "../../application/use-cases/set-birthday.ts";
 import { AppError } from "../../domain/errors.ts";
 import { formatUserName } from "../../infrastructure/discord/format-user-name.ts";
+import type { ModalPrefill } from "./birthday-modal.ts";
 import { buildBirthdayModal, parseModalSubmit } from "./birthday-modal.ts";
 import {
 	birthdayAddModalId,
 	birthdayAddUpdateNoId,
 	birthdayAddUpdateYesId,
 } from "./custom-ids.ts";
+
+function toPrefill(record: BirthdayRecord): ModalPrefill {
+	return {
+		dayMonth: `${String(record.day).padStart(2, "0")}.${String(record.month).padStart(2, "0")}.`,
+		year: record.year !== null ? String(record.year) : "",
+		timezone: record.timezone,
+	};
+}
 
 export class BirthdayAddHandler {
 	constructor(
@@ -30,16 +40,18 @@ export class BirthdayAddHandler {
 		const userId = interaction.user.id;
 		const nonce = interaction.id;
 		const existing = this.getBirthday.execute(userId);
+		const isActive = existing !== null && existing.removedAt === null;
 
-		if (existing === null) {
-			// No existing birthday — show modal immediately (must be first ack)
+		if (!isActive) {
+			// New user or previously removed: show modal immediately, prefilled if we have prior data
+			const prefill = existing !== null ? toPrefill(existing) : undefined;
 			const modalId = birthdayAddModalId(nonce);
-			await interaction.showModal(buildBirthdayModal(modalId));
+			await interaction.showModal(buildBirthdayModal(modalId, prefill));
 			await this.awaitAndProcessModal(interaction, modalId);
 			return;
 		}
 
-		// Existing birthday — ask for confirmation first
+		// Active existing birthday — ask for confirmation first
 		const yesId = birthdayAddUpdateYesId(nonce);
 		const noId = birthdayAddUpdateNoId(nonce);
 
@@ -88,13 +100,9 @@ export class BirthdayAddHandler {
 
 		// User clicked Yes — show modal with prefill
 		const modalId = birthdayAddModalId(nonce);
-		const prefill = {
-			dayMonth: `${String(existing.day).padStart(2, "0")}.${String(existing.month).padStart(2, "0")}.`,
-			year: existing.year !== null ? String(existing.year) : "",
-			timezone: existing.timezone,
-		};
-
-		await buttonInteraction.showModal(buildBirthdayModal(modalId, prefill));
+		await buttonInteraction.showModal(
+			buildBirthdayModal(modalId, toPrefill(existing)),
+		);
 		// Clear buttons on the original reply
 		await interaction.editReply({ components: [] });
 

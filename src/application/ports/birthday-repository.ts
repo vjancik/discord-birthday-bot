@@ -10,6 +10,7 @@ export interface BirthdayRecord {
 	nextTriggerAtUtc: number;
 	lastPostedAtUtc: number | null;
 	lastBirthDateChangeAtUtc: number | null;
+	removedAt: number | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -23,8 +24,10 @@ export interface BirthdayRepository {
 		nextTriggerAtUtc: number;
 		now: number;
 		lastBirthDateChangeAtUtc: number | null;
+		removedAt: number | null;
 	}): void;
-	delete(userId: string): void;
+	/** Soft-delete: sets removedAt = now, preserving lastBirthDateChangeAtUtc */
+	delete(userId: string, now: number): void;
 	findDue(nowUtcMillis: number): BirthdayRecord[];
 	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null;
 	reschedule(

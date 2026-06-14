@@ -1,4 +1,4 @@
-import { eq, gt, lte } from "drizzle-orm";
+import { and, eq, gt, isNull, lte } from "drizzle-orm";
 import type {
 	BirthdayRecord,
 	BirthdayRepository,
@@ -28,6 +28,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 		nextTriggerAtUtc: number;
 		now: number;
 		lastBirthDateChangeAtUtc: number | null;
+		removedAt: number | null;
 	}): void {
 		const existing = this.findByUserId(params.userId);
 		const createdAt = existing?.createdAt ?? params.now;
@@ -43,6 +44,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 				nextTriggerAtUtc: params.nextTriggerAtUtc,
 				lastPostedAtUtc: existing?.lastPostedAtUtc ?? null,
 				lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
+				removedAt: params.removedAt,
 				createdAt,
 				updatedAt: params.now,
 			})
@@ -55,21 +57,32 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 					timezone: params.timezone.ianaId,
 					nextTriggerAtUtc: params.nextTriggerAtUtc,
 					lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
+					removedAt: params.removedAt,
 					updatedAt: params.now,
 				},
 			})
 			.run();
 	}
 
-	delete(userId: string): void {
-		this.db.delete(birthdays).where(eq(birthdays.userId, userId)).run();
+	/** Soft-delete: sets removedAt = now, preserving lastBirthDateChangeAtUtc */
+	delete(userId: string, now: number): void {
+		this.db
+			.update(birthdays)
+			.set({ removedAt: now, updatedAt: now })
+			.where(eq(birthdays.userId, userId))
+			.run();
 	}
 
 	findDue(nowUtcMillis: number): BirthdayRecord[] {
 		const rows = this.db
 			.select()
 			.from(birthdays)
-			.where(lte(birthdays.nextTriggerAtUtc, nowUtcMillis))
+			.where(
+				and(
+					lte(birthdays.nextTriggerAtUtc, nowUtcMillis),
+					isNull(birthdays.removedAt),
+				),
+			)
 			.all();
 
 		return rows.map((row) => this.toRecord(row));
@@ -79,7 +92,12 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 		const row = this.db
 			.select()
 			.from(birthdays)
-			.where(gt(birthdays.nextTriggerAtUtc, nowUtcMillis))
+			.where(
+				and(
+					gt(birthdays.nextTriggerAtUtc, nowUtcMillis),
+					isNull(birthdays.removedAt),
+				),
+			)
 			.orderBy(birthdays.nextTriggerAtUtc)
 			.limit(1)
 			.get();
@@ -113,6 +131,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 			nextTriggerAtUtc: row.nextTriggerAtUtc,
 			lastPostedAtUtc: row.lastPostedAtUtc,
 			lastBirthDateChangeAtUtc: row.lastBirthDateChangeAtUtc,
+			removedAt: row.removedAt,
 			createdAt: row.createdAt,
 			updatedAt: row.updatedAt,
 		};

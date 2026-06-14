@@ -32,6 +32,9 @@ export class SetBirthdayUseCase {
 		const now = this.clock.nowUtcMillis();
 		const existing = this.repo.findByUserId(userId);
 
+		// Treat tombstoned records as having prior data (for cooldown + prefill) but not "active"
+		const wasRemoved = existing !== null && existing.removedAt !== null;
+
 		const birthDateChanged =
 			existing !== null &&
 			(existing.day !== birthDate.day || existing.month !== birthDate.month);
@@ -55,7 +58,7 @@ export class SetBirthdayUseCase {
 
 		const nextTriggerAtUtc = nextOccurrenceUtc(birthDate, timezone, now);
 
-		// Set on creation or real birth-date change; preserve on tz-only edits
+		// Set on creation or real birth-date change; preserve on tz-only edits and pure reactivation (same data)
 		const lastBirthDateChangeAtUtc =
 			existing === null || birthDateChanged
 				? now
@@ -68,9 +71,11 @@ export class SetBirthdayUseCase {
 			nextTriggerAtUtc,
 			now,
 			lastBirthDateChangeAtUtc,
+			removedAt: null,
 		});
 
-		const action = existing === null ? "add" : "update";
+		// Reactivation (removing tombstone) counts as an "add" to the user
+		const action = existing === null || wasRemoved ? "add" : "update";
 		await this.auditLog.publish({
 			action,
 			source,
@@ -80,6 +85,6 @@ export class SetBirthdayUseCase {
 			timezone: timezone.ianaId,
 		});
 
-		return { created: existing === null };
+		return { created: existing === null || wasRemoved };
 	}
 }

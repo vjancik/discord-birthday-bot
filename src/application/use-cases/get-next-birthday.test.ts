@@ -43,6 +43,7 @@ function makeRecord(userId: string, nextTriggerAtUtc: number): BirthdayRecord {
 		nextTriggerAtUtc,
 		lastPostedAtUtc: null,
 		lastBirthDateChangeAtUtc: null,
+		removedAt: null,
 		createdAt: 0,
 		updatedAt: 0,
 	};

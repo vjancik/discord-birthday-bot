@@ -35,6 +35,7 @@ class InMemoryRepo implements BirthdayRepository {
 		nextTriggerAtUtc: number;
 		now: number;
 		lastBirthDateChangeAtUtc: number | null;
+		removedAt: number | null;
 	}): void {
 		const existing = this.records.get(params.userId);
 		this.records.set(params.userId, {
@@ -46,24 +47,27 @@ class InMemoryRepo implements BirthdayRepository {
 			nextTriggerAtUtc: params.nextTriggerAtUtc,
 			lastPostedAtUtc: existing?.lastPostedAtUtc ?? null,
 			lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
+			removedAt: params.removedAt,
 			createdAt: existing?.createdAt ?? params.now,
 			updatedAt: params.now,
 		});
 	}
 
-	delete(userId: string): void {
-		this.records.delete(userId);
+	delete(userId: string, now: number): void {
+		const r = this.records.get(userId);
+		if (r === undefined) return;
+		this.records.set(userId, { ...r, removedAt: now, updatedAt: now });
 	}
 
 	findDue(nowUtcMillis: number): BirthdayRecord[] {
 		return [...this.records.values()].filter(
-			(r) => r.nextTriggerAtUtc <= nowUtcMillis,
+			(r) => r.nextTriggerAtUtc <= nowUtcMillis && r.removedAt === null,
 		);
 	}
 
 	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null {
 		const upcoming = [...this.records.values()]
-			.filter((r) => r.nextTriggerAtUtc > nowUtcMillis)
+			.filter((r) => r.nextTriggerAtUtc > nowUtcMillis && r.removedAt === null)
 			.sort((a, b) => a.nextTriggerAtUtc - b.nextTriggerAtUtc);
 		return upcoming[0] ?? null;
 	}
@@ -111,6 +115,7 @@ function makeRecord(
 		year: null,
 		lastPostedAtUtc: null,
 		lastBirthDateChangeAtUtc: null,
+		removedAt: null,
 		createdAt: 0,
 		updatedAt: 0,
 		...overrides,
