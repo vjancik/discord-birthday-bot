@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { BirthDate } from "../../domain/birth-date.ts";
+import { BirthDateChangeCooldownError } from "../../domain/errors.ts";
 import { Timezone } from "../../domain/timezone.ts";
 import type {
 	AuditEvent,
@@ -25,6 +26,7 @@ class InMemoryRepo implements BirthdayRepository {
 		timezone: Timezone;
 		nextTriggerAtUtc: number;
 		now: number;
+		lastBirthDateChangeAtUtc: number | null;
 	}): void {
 		const existing = this.records.get(params.userId);
 		this.records.set(params.userId, {
@@ -35,6 +37,7 @@ class InMemoryRepo implements BirthdayRepository {
 			timezone: params.timezone.ianaId,
 			nextTriggerAtUtc: params.nextTriggerAtUtc,
 			lastPostedAtUtc: existing?.lastPostedAtUtc ?? null,
+			lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
 			createdAt: existing?.createdAt ?? params.now,
 			updatedAt: params.now,
 		});
@@ -48,6 +51,13 @@ class InMemoryRepo implements BirthdayRepository {
 		return [...this.records.values()].filter(
 			(r) => r.nextTriggerAtUtc <= nowUtcMillis,
 		);
+	}
+
+	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null {
+		const upcoming = [...this.records.values()]
+			.filter((r) => r.nextTriggerAtUtc > nowUtcMillis)
+			.sort((a, b) => a.nextTriggerAtUtc - b.nextTriggerAtUtc);
+		return upcoming[0] ?? null;
 	}
 
 	reschedule(
@@ -102,10 +112,11 @@ describe("SetBirthdayUseCase", () => {
 		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
 		const bd = BirthDate.parse("01.01.", null);
 		const tz = Timezone.resolve("Europe/Prague");
-		await useCase.execute("123", bd, tz, "discord");
+		// Use cli source to bypass cooldown in this structural test
+		await useCase.execute("123", bd, tz, "cli");
 
 		const bd2 = BirthDate.parse("24.12.", null);
-		const result = await useCase.execute("123", bd2, tz, "discord");
+		const result = await useCase.execute("123", bd2, tz, "cli");
 
 		expect(result.created).toBe(false);
 		const record = repo.findByUserId("123");
@@ -139,15 +150,108 @@ describe("SetBirthdayUseCase", () => {
 		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
 		const bd = BirthDate.parse("01.01.", null);
 		const tz = Timezone.resolve("Europe/Prague");
-		await useCase.execute("123", bd, tz, "discord");
+		// Use cli source to bypass cooldown in this audit-event structural test
+		await useCase.execute("123", bd, tz, "cli");
 		auditLog.events.length = 0;
 
-		await useCase.execute(
-			"123",
-			BirthDate.parse("24.12.", null),
-			tz,
-			"discord",
-		);
+		await useCase.execute("123", BirthDate.parse("24.12.", null), tz, "cli");
 		expect(auditLog.events[0]?.action).toBe("update");
+	});
+
+	test("initial set records lastBirthDateChangeAtUtc = now", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+		await useCase.execute("123", bd, tz, "discord");
+
+		const record = repo.findByUserId("123");
+		expect(record?.lastBirthDateChangeAtUtc).toBe(NOW);
+	});
+
+	test("cooldown: throws BirthDateChangeCooldownError when discord user changes birth date within 14 days", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd1 = BirthDate.parse("01.01.", null);
+		const bd2 = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		// First set
+		await useCase.execute("123", bd1, tz, "discord");
+
+		// Immediately try to change birth date — still within 14-day cooldown
+		await expect(
+			useCase.execute("123", bd2, tz, "discord"),
+		).rejects.toBeInstanceOf(BirthDateChangeCooldownError);
+
+		// Record should be unchanged
+		const record = repo.findByUserId("123");
+		expect(record?.day).toBe(1);
+	});
+
+	test("cooldown: publishes update_rejected audit event on cooldown rejection", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd1 = BirthDate.parse("01.01.", null);
+		const bd2 = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		await useCase.execute("123", bd1, tz, "discord");
+		auditLog.events.length = 0;
+
+		await useCase.execute("123", bd2, tz, "discord").catch(() => undefined);
+
+		expect(auditLog.events).toHaveLength(1);
+		expect(auditLog.events[0]?.action).toBe("update_rejected");
+	});
+
+	test("cooldown: cli source bypasses cooldown check", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd1 = BirthDate.parse("01.01.", null);
+		const bd2 = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		await useCase.execute("123", bd1, tz, "cli");
+		// Immediately change via CLI — should succeed regardless of cooldown
+		const result = await useCase.execute("123", bd2, tz, "cli");
+		expect(result.created).toBe(false);
+		const record = repo.findByUserId("123");
+		expect(record?.day).toBe(24);
+	});
+
+	test("cooldown: tz-only edit within 14 days succeeds and preserves lastBirthDateChangeAtUtc", async () => {
+		const useCase = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		const bd = BirthDate.parse("24.12.", null);
+		const tz1 = Timezone.resolve("Europe/Prague");
+		const tz2 = Timezone.resolve("America/New_York");
+
+		await useCase.execute("123", bd, tz1, "discord");
+		const afterFirst = repo.findByUserId("123")?.lastBirthDateChangeAtUtc;
+
+		// Tz-only change — no birth date change, no cooldown
+		await useCase.execute("123", bd, tz2, "discord");
+
+		const record = repo.findByUserId("123");
+		expect(record?.timezone).toBe("America/New_York");
+		expect(record?.lastBirthDateChangeAtUtc).toBe(afterFirst); // unchanged
+	});
+
+	test("cooldown: birth date change allowed after 14 days", async () => {
+		const FOURTEEN_DAYS_LATER = NOW + 14 * 24 * 60 * 60 * 1000 + 1;
+		const bd1 = BirthDate.parse("01.01.", null);
+		const bd2 = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+
+		const useCase1 = new SetBirthdayUseCase(repo, auditLog, fixedClock(NOW));
+		await useCase1.execute("123", bd1, tz, "discord");
+
+		const useCase2 = new SetBirthdayUseCase(
+			repo,
+			auditLog,
+			fixedClock(FOURTEEN_DAYS_LATER),
+		);
+		const result = await useCase2.execute("123", bd2, tz, "discord");
+
+		expect(result.created).toBe(false);
+		const record = repo.findByUserId("123");
+		expect(record?.day).toBe(24);
+		expect(record?.lastBirthDateChangeAtUtc).toBe(FOURTEEN_DAYS_LATER);
 	});
 });

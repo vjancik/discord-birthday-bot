@@ -1,5 +1,6 @@
 import {
 	ActionRowBuilder,
+	ComponentType,
 	ModalBuilder,
 	type ModalSubmitInteraction,
 	TextInputBuilder,
@@ -63,10 +64,17 @@ export function buildBirthdayModal(
 		timezoneInput.setValue(prefill.timezone);
 	}
 
+	const disclaimer = {
+		type: ComponentType.TextDisplay,
+		content:
+			"⚠️ You can only update your birth date **once every two weeks** and the birthday notification will only trigger **once per calendar year**!",
+	};
+
 	return new ModalBuilder({
 		customId: modalId,
 		title: "Set your birthday",
 		components: [
+			disclaimer,
 			new ActionRowBuilder<TextInputBuilder>().addComponents(dayMonthInput),
 			new ActionRowBuilder<TextInputBuilder>().addComponents(yearInput),
 			new ActionRowBuilder<TextInputBuilder>().addComponents(timezoneInput),

@@ -1,4 +1,5 @@
 import type { BirthDate } from "../../domain/birth-date.ts";
+import { BirthDateChangeCooldownError } from "../../domain/errors.ts";
 import { nextOccurrenceUtc } from "../../domain/next-occurrence.ts";
 import type { Timezone } from "../../domain/timezone.ts";
 import type {
@@ -7,6 +8,8 @@ import type {
 } from "../ports/audit-log-publisher.ts";
 import type { BirthdayRepository } from "../ports/birthday-repository.ts";
 import type { Clock } from "../ports/clock.ts";
+
+const COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000;
 
 export interface SetBirthdayResult {
 	created: boolean;
@@ -27,9 +30,43 @@ export class SetBirthdayUseCase {
 	): Promise<SetBirthdayResult> {
 		const now = this.clock.nowUtcMillis();
 		const existing = this.repo.findByUserId(userId);
+
+		const birthDateChanged =
+			existing !== null &&
+			(existing.day !== birthDate.day || existing.month !== birthDate.month);
+
+		if (
+			source === "discord" &&
+			birthDateChanged &&
+			existing.lastBirthDateChangeAtUtc !== null &&
+			now - existing.lastBirthDateChangeAtUtc < COOLDOWN_MS
+		) {
+			await this.auditLog.publish({
+				action: "update_rejected",
+				source,
+				userId,
+				birthDate: birthDate.formatWithYear(),
+				timezone: timezone.ianaId,
+			});
+			throw new BirthDateChangeCooldownError();
+		}
+
 		const nextTriggerAtUtc = nextOccurrenceUtc(birthDate, timezone, now);
 
-		this.repo.upsert({ userId, birthDate, timezone, nextTriggerAtUtc, now });
+		// Set on creation or real birth-date change; preserve on tz-only edits
+		const lastBirthDateChangeAtUtc =
+			existing === null || birthDateChanged
+				? now
+				: existing.lastBirthDateChangeAtUtc;
+
+		this.repo.upsert({
+			userId,
+			birthDate,
+			timezone,
+			nextTriggerAtUtc,
+			now,
+			lastBirthDateChangeAtUtc,
+		});
 
 		const action = existing === null ? "add" : "update";
 		await this.auditLog.publish({

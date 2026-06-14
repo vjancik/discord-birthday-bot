@@ -9,6 +9,7 @@ export interface BirthdayRecord {
 	timezone: string;
 	nextTriggerAtUtc: number;
 	lastPostedAtUtc: number | null;
+	lastBirthDateChangeAtUtc: number | null;
 	createdAt: number;
 	updatedAt: number;
 }
@@ -21,9 +22,11 @@ export interface BirthdayRepository {
 		timezone: Timezone;
 		nextTriggerAtUtc: number;
 		now: number;
+		lastBirthDateChangeAtUtc: number | null;
 	}): void;
 	delete(userId: string): void;
 	findDue(nowUtcMillis: number): BirthdayRecord[];
+	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null;
 	reschedule(
 		userId: string,
 		nextTriggerAtUtc: number,

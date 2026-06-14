@@ -41,6 +41,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW + 1000,
 			now: NOW,
+			lastBirthDateChangeAtUtc: NOW,
 		});
 
 		const record = repo.findByUserId(USER_ID);
@@ -51,6 +52,7 @@ describe("DrizzleBirthdayRepository", () => {
 		expect(record?.timezone).toBe("Europe/Prague");
 		expect(record?.createdAt).toBe(NOW);
 		expect(record?.updatedAt).toBe(NOW);
+		expect(record?.lastBirthDateChangeAtUtc).toBe(NOW);
 	});
 
 	test("upsert updates an existing record without changing createdAt", () => {
@@ -62,6 +64,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW,
 			now: NOW,
+			lastBirthDateChangeAtUtc: NOW,
 		});
 
 		const later = NOW + 10_000;
@@ -72,12 +75,32 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: later + 1000,
 			now: later,
+			lastBirthDateChangeAtUtc: later,
 		});
 
 		const record = repo.findByUserId(USER_ID);
 		expect(record?.day).toBe(24);
 		expect(record?.createdAt).toBe(NOW); // unchanged
 		expect(record?.updatedAt).toBe(later);
+		expect(record?.lastBirthDateChangeAtUtc).toBe(later);
+	});
+
+	test("reschedule does not change lastBirthDateChangeAtUtc", () => {
+		const bd = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+		repo.upsert({
+			userId: USER_ID,
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW,
+			now: NOW,
+			lastBirthDateChangeAtUtc: NOW,
+		});
+
+		repo.reschedule(USER_ID, NOW + 86_400_000, NOW);
+
+		const record = repo.findByUserId(USER_ID);
+		expect(record?.lastBirthDateChangeAtUtc).toBe(NOW); // unchanged by reschedule
 	});
 
 	test("delete removes the record", () => {
@@ -89,6 +112,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 		repo.delete(USER_ID);
 		expect(repo.findByUserId(USER_ID)).toBeNull();
@@ -104,6 +128,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW - 1,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 		repo.upsert({
 			userId: "u2",
@@ -111,6 +136,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 		repo.upsert({
 			userId: "u3",
@@ -118,11 +144,79 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW + 1,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 
 		const due = repo.findDue(NOW);
 		const dueIds = due.map((r) => r.userId).sort();
 		expect(dueIds).toEqual(["u1", "u2"]);
+	});
+
+	test("findNextUpcoming returns the soonest future record (strictly > now)", () => {
+		const tz = Timezone.resolve("Europe/Prague");
+		const bd = BirthDate.parse("24.12.", null);
+
+		repo.upsert({
+			userId: "u1",
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW - 1,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+		repo.upsert({
+			userId: "u2",
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW + 1000,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+		repo.upsert({
+			userId: "u3",
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW + 5000,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+
+		const next = repo.findNextUpcoming(NOW);
+		expect(next?.userId).toBe("u2");
+	});
+
+	test("findNextUpcoming returns null when no future records exist", () => {
+		const tz = Timezone.resolve("Europe/Prague");
+		const bd = BirthDate.parse("24.12.", null);
+		repo.upsert({
+			userId: "u1",
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW - 1,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+
+		expect(repo.findNextUpcoming(NOW)).toBeNull();
+	});
+
+	test("findNextUpcoming returns null when empty", () => {
+		expect(repo.findNextUpcoming(NOW)).toBeNull();
+	});
+
+	test("findNextUpcoming excludes at-now trigger (strict >)", () => {
+		const tz = Timezone.resolve("Europe/Prague");
+		const bd = BirthDate.parse("24.12.", null);
+		repo.upsert({
+			userId: "u1",
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+
+		expect(repo.findNextUpcoming(NOW)).toBeNull();
 	});
 
 	test("reschedule updates nextTriggerAtUtc and lastPostedAtUtc", () => {
@@ -134,6 +228,7 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 
 		const newTrigger = NOW + 86_400_000;
@@ -153,9 +248,26 @@ describe("DrizzleBirthdayRepository", () => {
 			timezone: tz,
 			nextTriggerAtUtc: NOW,
 			now: NOW,
+			lastBirthDateChangeAtUtc: null,
 		});
 
 		const record = repo.findByUserId(USER_ID);
 		expect(record?.year).toBeNull();
+	});
+
+	test("lastBirthDateChangeAtUtc stored as null when not provided", () => {
+		const bd = BirthDate.parse("24.12.", null);
+		const tz = Timezone.resolve("Europe/Prague");
+		repo.upsert({
+			userId: USER_ID,
+			birthDate: bd,
+			timezone: tz,
+			nextTriggerAtUtc: NOW,
+			now: NOW,
+			lastBirthDateChangeAtUtc: null,
+		});
+
+		const record = repo.findByUserId(USER_ID);
+		expect(record?.lastBirthDateChangeAtUtc).toBeNull();
 	});
 });

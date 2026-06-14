@@ -11,8 +11,13 @@ A self-hosted Discord bot that lets server members register their birthday and t
 - Birthday announcements posted at **noon in the user's local timezone**, DST-correct for every future year
 - Feb 29 birthdays are gracefully handled — announced on Feb 28 in non-leap years
 - Audit log channel receives a message on every add, update, remove, and bot lifecycle event
+- Abuse prevention: birth date changes are rate-limited to once every two weeks per user, and announcements fire at most once per calendar year regardless of reschedules
 - CLI scripts for manual database administration without needing Discord
 - Persistent storage via SQLite; migrations run automatically at startup
+
+## Limitations
+
+- **Single-server only** — announcement and log channels are configured via environment variables, so the bot is tied to one server. Extending to multiple servers would require storing per-guild channel configuration (e.g. via a `/setup` command) instead of static env vars.
 
 ## Requirements
 

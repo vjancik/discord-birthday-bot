@@ -1,4 +1,4 @@
-export type AuditAction = "add" | "update" | "remove";
+export type AuditAction = "add" | "update" | "remove" | "update_rejected";
 export type AuditSource = "discord" | "cli";
 
 export interface AuditEvent {

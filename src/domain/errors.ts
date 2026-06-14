@@ -28,3 +28,11 @@ export class MissingEnvVarError extends AppError {
 }
 
 export class ConfigError extends AppError {}
+
+export class BirthDateChangeCooldownError extends AppError {
+	constructor() {
+		super(
+			"Sorry, it seems like you recently changed your birth date and can't do so again right now. Please try again later.",
+		);
+	}
+}

@@ -10,7 +10,12 @@ export const birthdayRemoveCommand = new SlashCommandBuilder()
 	.setName("birthday_remove")
 	.setDescription("Remove your birthday from the bot.");
 
+export const birthdayNextCommand = new SlashCommandBuilder()
+	.setName("birthday_next")
+	.setDescription("See whose birthday is coming up next.");
+
 export const commandDefinitions = [
 	birthdayAddCommand.toJSON(),
 	birthdayRemoveCommand.toJSON(),
+	birthdayNextCommand.toJSON(),
 ];

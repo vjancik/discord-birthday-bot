@@ -57,6 +57,7 @@ Dependency direction: `adapters → application → domain`. Nothing in `domain/
 | `BirthdayNotFoundError` | Remove attempted for a user with no record |
 | `MissingEnvVarError` | One or more required env vars absent at startup |
 | `ConfigError` | General startup configuration problem |
+| `BirthDateChangeCooldownError` | Discord user attempts to change birth date within 14 days of the last change |
 
 All extend `AppError` which sets `this.name` from the constructor name, making `instanceof` checks reliable even through transpilation.
 
@@ -92,9 +93,10 @@ Typed interfaces that describe what the application layer needs from infrastruct
 
 | Port | Description |
 |---|---|
-| `BirthdayRepository` | CRUD + `findDue(nowMs)` + `reschedule(userId, nextTrigger, lastPosted)` |
+| `BirthdayRepository` | CRUD + `findDue(nowMs)` + `findNextUpcoming(nowMs)` + `reschedule(userId, nextTrigger, lastPosted)` |
 | `AuditLogPublisher` | `publish(event)` for user data changes; `publishSystem(message)` for bot lifecycle events (startup, shutdown, gateway errors) |
 | `AnnouncementPublisher` | `publishBirthday(content, signal)` — posts to the birthday channel; `signal` is an `AbortSignal` that cancels the REST call if the scheduler tick times out |
+| `MembershipChecker` | `isMember(userId)` — returns true if the user is still in the guild; throws on network/API errors other than 404 |
 | `Clock` | `nowUtcMillis()` — abstracted so tests can control "now" |
 | `RandomSource` | `next()` returns `[0,1)` — abstracted so tests can pin message selection |
 
@@ -106,14 +108,17 @@ Each file is one user-facing action. Use cases receive all their dependencies th
 
 **`SetBirthdayUseCase`** — create or update a birthday record.
 1. Checks whether a record already exists to determine if this is a create or update.
-2. Calls `nextOccurrenceUtc` to compute the first trigger time.
-3. Upserts via the repository.
-4. Publishes an `"add"` or `"update"` audit event.
-5. Returns `{ created: boolean }` so callers can vary their confirmation message.
+2. **Cooldown check** (Discord source only): if the birth date (day/month/year) changed and `lastBirthDateChangeAtUtc` is within the past 14 days, publishes an `"update_rejected"` audit event and throws `BirthDateChangeCooldownError`. CLI source bypasses this check.
+3. Calls `nextOccurrenceUtc` to compute the first trigger time.
+4. Upserts via the repository, recording `lastBirthDateChangeAtUtc = now` on initial creation or a real birth-date change; preserves the existing value on timezone-only edits.
+5. Publishes an `"add"` or `"update"` audit event.
+6. Returns `{ created: boolean }` so callers can vary their confirmation message.
 
 **`GetBirthdayUseCase`** — thin wrapper around `repo.findByUserId`. Exists as a named use case to keep the adapter layer free of direct repository imports.
 
 **`RemoveBirthdayUseCase`** — deletes a record, throws `BirthdayNotFoundError` if none exists, publishes a `"remove"` audit event.
+
+**`GetNextBirthdayUseCase`** — returns the single `BirthdayRecord` with the nearest future `nextTriggerAtUtc`, or `null` if no birthdays are registered. Used by the `/birthday_next` command.
 
 **`RunDueBirthdaysUseCase`** — the scheduler tick. See [Scheduler](#scheduler) for the full algorithm.
 
@@ -129,11 +134,17 @@ Each file is one user-facing action. Use cases receive all their dependencies th
 
 **`db/client.ts`** — creates the database, ensures the `data/` directory exists, then immediately runs migrations via `drizzle-orm/bun-sqlite/migrator`. This happens in every entrypoint (bot startup and CLI scripts), so the schema is always up to date regardless of which process touches the DB file first.
 
-**`db/drizzle-birthday-repository.ts`** — `DrizzleBirthdayRepository` implements `BirthdayRepository`. `upsert` uses `onConflictDoUpdate` targeting the primary key. `createdAt` is preserved by reading the existing record before upserting. `reschedule` is a targeted `UPDATE` of only the two trigger columns so the scheduler never accidentally overwrites user-entered data.
+**`db/drizzle-birthday-repository.ts`** — `DrizzleBirthdayRepository` implements `BirthdayRepository`. `upsert` uses `onConflictDoUpdate` targeting the primary key. `createdAt` and `lastPostedAtUtc` are preserved by reading the existing record before upserting. `reschedule` is a targeted `UPDATE` of only the trigger columns — it never touches `lastBirthDateChangeAtUtc`. `findNextUpcoming` uses `WHERE next_trigger_at_utc > now ORDER BY next_trigger_at_utc LIMIT 1` on the existing index.
 
 **`discord/rest-audit-log-publisher.ts`** — posts audit messages to `BD_BOT_LOG_CHANNEL` via the Discord REST API (no gateway connection required). Used by both the gateway bot and the CLI scripts. Publish failures are caught and logged — the DB mutation already succeeded and should not be rolled back because an audit message failed to send.
 
 **`discord/rest-announcement-publisher.ts`** — posts birthday messages to `BIRTHDAY_POST_CHANNEL` via REST.
+
+**`discord/rest-membership-checker.ts`** — `RestMembershipChecker` implements `MembershipChecker`. Calls `GET /guilds/{guildId}/members/{userId}`; catches `DiscordAPIError` with code `10007` (Unknown Member) and returns `false`; rethrows other errors so the scheduler can fail closed.
+
+**`discord/startup-validation.ts`** — `validateChannels(rest, postChannelId, logChannelId)` fetches both configured channels via REST before the gateway connects. Throws `ConfigError` with a descriptive message if either channel is unreachable. Returns `{ postChannelGuildId }` which is used to instantiate `RestMembershipChecker` with the correct guild.
+
+**`discord/null-audit-log-publisher.ts`** — no-op `AuditLogPublisher` used by CLI scripts when `--no-discord` is passed.
 
 ---
 
@@ -141,11 +152,13 @@ Each file is one user-facing action. Use cases receive all their dependencies th
 
 **`custom-ids.ts`** — all customIds in one place. Button and modal IDs carry a *nonce* (the originating `interaction.id`) so each ephemeral flow is isolated to a single user invocation and collector filters are exact.
 
-**`birthday-modal.ts`** — `buildBirthdayModal(modalId, prefill?)` builds the 3-field modal. `parseModalSubmit(interaction)` extracts the raw strings and runs them through `BirthDate.parse` and `Timezone.resolve` — the same functions used by the CLI scripts.
+**`birthday-modal.ts`** — `buildBirthdayModal(modalId, prefill?)` builds the modal with a `TextDisplay` disclaimer at the top and 3 text input fields. The disclaimer reads: "You can only update your birth date once every two weeks and the birthday notification will only trigger once per calendar year!" `parseModalSubmit(interaction)` extracts the raw strings and runs them through `BirthDate.parse` and `Timezone.resolve`.
 
 **`birthday-add.handler.ts`** — implements the full `/birthday_add` flow (see [Interaction flows](#interaction-flows)).
 
 **`birthday-remove.handler.ts`** — implements the `/birthday_remove` flow.
+
+**`birthday-next.handler.ts`** — handles `/birthday_next`. Calls `GetNextBirthdayUseCase`; on null replies ephemeral "No birthdays are set yet."; otherwise replies ephemeral with `<@userId>` (no ping, `allowedMentions: { parse: [] }`) and a `<t:UNIX:F>` Discord timestamp (localized per viewer).
 
 **`interaction-router.ts`** — single `Events.InteractionCreate` listener that dispatches to the correct handler by `commandName`. Catches and logs any unhandled errors so the process doesn't crash.
 
@@ -171,6 +184,8 @@ User invokes /birthday_add
                       └─ Validation error → ephemeral error message (same text as CLI)
 ```
 
+Modal includes a `TextDisplay` disclaimer at the top about the 2-week cooldown and once-per-year notification.
+
 ### `/birthday_add` — existing user
 
 ```
@@ -182,10 +197,10 @@ User invokes /birthday_add
             └─ Yes → buttonInteraction.showModal() with prefill values
                   └─ editReply to clear the buttons
                        └─ User fills in form (values pre-populated)
-                            └─ parseModalSubmit() → SetBirthdayUseCase → ephemeral confirmation
+                            └─ parseModalSubmit() → SetBirthdayUseCase
+                                 ├─ Success → ephemeral confirmation
+                                 └─ Cooldown violation → ephemeral error from BirthDateChangeCooldownError
 ```
-
-A key constraint: `showModal()` must be the *first* response to an interaction (within 3 seconds). In the new-user flow the modal acks the slash command directly. In the update flow the modal acks the *button* interaction — the slash command interaction was already acked by the ephemeral reply.
 
 ### `/birthday_remove`
 
@@ -198,7 +213,15 @@ User invokes /birthday_remove
        └─ Yes → RemoveBirthdayUseCase → update reply to "Your birthday has been removed."
 ```
 
-All replies are ephemeral (`MessageFlags.Ephemeral`). Collectors use `awaitMessageComponent` on the fetched reply message (not on the interaction itself — `ChatInputCommandInteraction` does not have `awaitMessageComponent`). All collector promises are caught so a timeout rejection does not produce an unhandled rejection.
+### `/birthday_next`
+
+```
+User invokes /birthday_next
+  ├─ No birthdays registered → ephemeral "No birthdays are set yet."
+  └─ Record found → ephemeral "The next birthday is <@userId> on <t:UNIX:F>. 🎂"
+```
+
+All replies are ephemeral (`MessageFlags.Ephemeral`).
 
 ---
 
@@ -209,13 +232,17 @@ All replies are ephemeral (`MessageFlags.Ephemeral`). Collectors use `awaitMessa
 Each tick:
 
 1. `repo.findDue(now)` — `SELECT ... WHERE next_trigger_at_utc <= now` (indexed).
-2. For each due row, reconstruct the `BirthDate` and `Timezone` value objects from stored columns.
-3. **Catch-up policy** — `isSameBirthdayLocalDay(birthDate, timezone, now)`: if the local date in the user's zone is still the birthday, post; if the bot was down past local midnight, skip posting (but still reschedule).
-4. **Double-post guard** — if `lastPostedAtUtc` is already on the same local calendar day as `now`, skip. Prevents double-posting if `reschedule` is called but the process crashes before updating `lastPostedAtUtc` (belt-and-suspenders alongside the at-most-once ordering).
-5. **Post, then reschedule** — the announcement REST call is made first. Only after it succeeds is `repo.reschedule(userId, nextTrigger, now)` called to advance the trigger and record `lastPostedAtUtc`. If the REST call fails (network error, Discord outage), the row is left untouched so the next tick can retry — **at-least-once** delivery. The double-post guard (step 4) prevents a duplicate if the process retries within the same local calendar day.
-6. An `AbortSignal` tied to `TICK_INTERVAL_MS` is passed to the publisher. If a REST call is still in-flight when the abort fires, it is cancelled — preventing a slow previous-tick response from triggering a `reschedule` after a newer tick has already started.
+2. An `AbortController` is created with a timeout of `TICK_INTERVAL_MS`. All records in the tick share this abort signal.
+3. At the **top of each loop iteration**, check `abort.signal.aborted` — if the tick timeout has elapsed, break out of the loop to prevent stale in-flight posts from a slow previous tick.
+4. For each due row, reconstruct the `BirthDate` and `Timezone` value objects from stored columns.
+5. **Catch-up policy** — `isSameBirthdayLocalDay(birthDate, timezone, now)`: if the local date in the user's zone is still the birthday, post; if the bot was down past local midnight, skip posting (but still reschedule).
+6. **Once-per-calendar-year guard** — if `lastPostedAtUtc` is set and its local year equals the current local year, skip. This subsumes the old same-day check and ensures at most one post per year regardless of restarts or trigger drift.
+7. **Guild membership check** — if `MembershipChecker` is wired in, calls `isMember(userId)`. If false (user left), reschedule with the old `lastPostedAtUtc` preserved (so a rejoin will still post next year). On API error, fail closed: leave trigger unchanged for retry next tick.
+8. **Post, then reschedule** — the announcement REST call is made first with the tick's `AbortSignal`. Only after it succeeds is `repo.reschedule(userId, nextTrigger, now)` called. If the REST call fails, the row is left untouched so the next tick can retry — **at-least-once** delivery. The once-per-year guard prevents duplicates.
 
 `nextOccurrenceUtc` always returns a value strictly greater than `now`, so rescheduling always moves the trigger forward.
+
+discord.js's REST client handles per-bucket rate limiting natively (global 50/s, per-bucket queue, waits `retryAfter`, retries:3), so no custom queue is needed for the announcement publisher.
 
 ---
 
@@ -248,11 +275,12 @@ Single table `birthdays` in `./data/birthdays.sqlite` (path configurable via `DB
 | `year` | INTEGER NULL | Optional; bot functions correctly without it |
 | `timezone` | TEXT NOT NULL | IANA zone id, e.g. `Europe/Prague` |
 | `next_trigger_at_utc` | INTEGER NOT NULL | Epoch milliseconds; **indexed** |
-| `last_posted_at_utc` | INTEGER NULL | Epoch ms of the last successful post; used for the double-post guard |
+| `last_posted_at_utc` | INTEGER NULL | Epoch ms of the last successful post; used for the once-per-year guard |
+| `last_birth_date_change_at_utc` | INTEGER NULL | Epoch ms of the last birth date (day/month/year) change; used for the 14-day cooldown |
 | `created_at` | INTEGER NOT NULL | Epoch ms |
 | `updated_at` | INTEGER NOT NULL | Epoch ms |
 
-The index on `next_trigger_at_utc` makes the scheduler query (`WHERE next_trigger_at_utc <= now`) fast regardless of table size.
+The index on `next_trigger_at_utc` serves both the scheduler's `findDue` query (`WHERE <= now`) and `findNextUpcoming` (`WHERE > now ORDER BY … LIMIT 1`).
 
 Migrations live in `drizzle/` and are generated by `drizzle-kit`. They are applied programmatically at startup via `drizzle-orm/bun-sqlite/migrator` rather than as a separate `drizzle-kit push` step — this means the DB is always at the correct schema version when any entrypoint (bot or CLI script) opens it.
 
@@ -260,7 +288,7 @@ Migrations live in `drizzle/` and are generated by `drizzle-kit`. They are appli
 
 ## Configuration
 
-All config is loaded at startup from environment variables (`.env` is auto-loaded by Bun). Missing required vars fail immediately with a single error listing all absent names.
+All config is loaded at startup from environment variables (`.env` is auto-loaded by Bun). Missing required vars fail immediately with a single error listing all absent names. Both channel IDs are validated via REST before the gateway connects; an unreachable channel throws `ConfigError` and aborts startup.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -276,22 +304,23 @@ All config is loaded at startup from environment variables (`.env` is auto-loade
 
 ## CLI scripts
 
-Two scripts that bypass Discord and operate directly on the database. Both go through the same domain validation and use cases as the Discord interaction handlers — error messages are identical.
+Two scripts that bypass Discord and operate directly on the database. Both go through the same domain validation and use cases as the Discord interaction handlers — error messages are identical. The `--no-discord` flag skips the REST audit post (useful when the bot token is unavailable or for offline maintenance).
 
 **`scripts/birthday-add.ts`**
 
 ```
-bun scripts/birthday-add.ts <userId> <DD.MM.> <timezone> [year]
+bun scripts/birthday-add.ts [--no-discord] <userId> <DD.MM.> <timezone> [year]
 # e.g.
 bun scripts/birthday-add.ts 123456789012345678 24.12. Prague 1990
+bun scripts/birthday-add.ts --no-discord 123456789012345678 24.12. Prague
 ```
 
-Creates or updates a birthday record and posts an audit event to `BD_BOT_LOG_CHANNEL` via REST.
+Creates or updates a birthday record. The CLI source bypasses the 14-day cooldown, allowing admins to correct birth date entries at any time.
 
 **`scripts/birthday-remove.ts`**
 
 ```
-bun scripts/birthday-remove.ts <userId>
+bun scripts/birthday-remove.ts [--no-discord] <userId>
 # e.g.
 bun scripts/birthday-remove.ts 123456789012345678
 ```
@@ -304,13 +333,13 @@ Removes a birthday record and posts an audit event. Prints a friendly error and 
 bun run register-commands
 ```
 
-Registers the two slash commands via REST. Uses guild-scoped registration if `GUILD_ID` is set (changes are instant, useful for development), otherwise registers globally.
+Registers the slash commands (`birthday_add`, `birthday_remove`, `birthday_next`) via REST. Uses guild-scoped registration if `GUILD_ID` is set (changes are instant, useful for development), otherwise registers globally.
 
 ---
 
 ## Tests
 
-70 tests across 8 files, all colocated next to the unit they test. Run with `bun test`.
+89 tests across 9 files, all colocated next to the unit they test. Run with `bun test`.
 
 | File | What it covers |
 |---|---|
@@ -318,10 +347,11 @@ Registers the two slash commands via REST. Uses guild-scoped registration if `GU
 | `src/domain/timezone.test.ts` | Exact IANA match, city lookup, manual aliases, whitespace trimming, error message content |
 | `src/domain/next-occurrence.test.ts` | Correct UTC for DST (winter vs. summer), next-year wrap, Feb 29 leap/non-leap, boundary (trigger == after → next year) |
 | `src/domain/well-wishes.test.ts` | Exactly 10 messages, random index selection at bounds, output format |
-| `src/application/use-cases/set-birthday.test.ts` | Create vs. update return value, trigger computed in future, audit events with correct action/source |
-| `src/application/use-cases/run-due-birthdays.test.ts` | Happy path post+reschedule, missed-midnight skip-but-reschedule, double-post guard, at-least-once (trigger unchanged when POST fails so next tick can retry) |
+| `src/application/use-cases/set-birthday.test.ts` | Create vs. update return value, trigger computed in future, audit events, cooldown enforcement (discord), cooldown bypass (cli), tz-only edit preserves `lastBirthDateChangeAtUtc`, 14-day expiry |
+| `src/application/use-cases/run-due-birthdays.test.ts` | Happy path post+reschedule, missed-midnight skip-but-reschedule, once-per-year guard (same year skip, prior year posts), at-least-once (trigger unchanged on POST failure), abort signal stops further iterations, membership skip (user left, fail-closed on error, posts when member) |
+| `src/application/use-cases/get-next-birthday.test.ts` | Passthrough to repo, null on empty |
 | `src/infrastructure/config/env.test.ts` | All vars present, multiple missing → single error, optional var defaults |
-| `src/infrastructure/db/drizzle-birthday-repository.test.ts` | upsert/find/delete/findDue/reschedule against an in-memory SQLite (`:memory:`), `createdAt` immutability, null year storage |
+| `src/infrastructure/db/drizzle-birthday-repository.test.ts` | upsert/find/delete/findDue/findNextUpcoming/reschedule against in-memory SQLite, `createdAt` immutability, `lastBirthDateChangeAtUtc` round-trip, reschedule does not touch it, `findNextUpcoming` strict `>` semantics |
 
 The Discord interaction handlers are not unit-tested because they are tightly coupled to the discord.js object model. The value-bearing logic (parsing, validation, use case execution) is covered by the layers below.
 
@@ -362,26 +392,8 @@ Discord modals have no built-in validation beyond `setRequired` and `setMaxLengt
 
 Possible enhancement: for the date field, consider accepting separate day and month fields with numeric constraints, though this uses 2 of the 5 available modal rows and still cannot enforce cross-field constraints like "day must be valid for this month."
 
-### No guild membership check
-
-The bot stores a Discord snowflake user ID without verifying the user is still a member of the guild. If a user leaves the server and their birthday fires, the announcement will include a non-resolving mention (`<@123…>`) rather than a display name.
-
-Possible enhancement: at announcement time, attempt to fetch guild member details via REST and skip or flag the post if the member is no longer present.
-
-### REST audit log from CLI scripts
-
-CLI scripts post to the audit log channel via REST directly. This requires a valid bot token in the environment even when just doing a one-off data fix. If the REST call fails (network down, wrong token), the DB write still succeeds and the failure is printed to stdout.
-
-Possible enhancement: add a `--no-discord` flag to the CLI scripts that skips the REST audit post and only writes to stdout/pino, useful for offline maintenance.
-
 ### Feb 29 ambiguity
 
 A user born on Feb 29 will be greeted on Feb 28 in non-leap years. This is the most natural interpretation but it is not announced to the user. The confirmation message after `/birthday_add` shows the date as stored (`29.02.`), which may cause confusion when the greeting arrives on the 28th.
 
 Possible enhancement: add a note to the confirmation message for Feb 29 birthdays: "In non-leap years I'll post on Feb 28."
-
-### No rate-limit awareness
-
-The announcement and audit log publishers use fire-and-forget REST calls with no rate-limit backoff. At the scale of a single community server this is fine, but if many birthdays fall on the same day the bot could hit Discord's per-channel rate limits.
-
-Possible enhancement: wrap the REST publishers with a simple queue that enforces a minimum delay between posts to the same channel.

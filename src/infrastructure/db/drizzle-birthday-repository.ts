@@ -1,4 +1,4 @@
-import { eq, lte } from "drizzle-orm";
+import { eq, gt, lte } from "drizzle-orm";
 import type {
 	BirthdayRecord,
 	BirthdayRepository,
@@ -27,6 +27,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 		timezone: Timezone;
 		nextTriggerAtUtc: number;
 		now: number;
+		lastBirthDateChangeAtUtc: number | null;
 	}): void {
 		const existing = this.findByUserId(params.userId);
 		const createdAt = existing?.createdAt ?? params.now;
@@ -41,6 +42,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 				timezone: params.timezone.ianaId,
 				nextTriggerAtUtc: params.nextTriggerAtUtc,
 				lastPostedAtUtc: existing?.lastPostedAtUtc ?? null,
+				lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
 				createdAt,
 				updatedAt: params.now,
 			})
@@ -52,6 +54,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 					year: params.birthDate.year,
 					timezone: params.timezone.ianaId,
 					nextTriggerAtUtc: params.nextTriggerAtUtc,
+					lastBirthDateChangeAtUtc: params.lastBirthDateChangeAtUtc,
 					updatedAt: params.now,
 				},
 			})
@@ -70,6 +73,18 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 			.all();
 
 		return rows.map((row) => this.toRecord(row));
+	}
+
+	findNextUpcoming(nowUtcMillis: number): BirthdayRecord | null {
+		const row = this.db
+			.select()
+			.from(birthdays)
+			.where(gt(birthdays.nextTriggerAtUtc, nowUtcMillis))
+			.orderBy(birthdays.nextTriggerAtUtc)
+			.limit(1)
+			.get();
+
+		return row !== undefined ? this.toRecord(row) : null;
 	}
 
 	reschedule(
@@ -97,6 +112,7 @@ export class DrizzleBirthdayRepository implements BirthdayRepository {
 			timezone: row.timezone,
 			nextTriggerAtUtc: row.nextTriggerAtUtc,
 			lastPostedAtUtc: row.lastPostedAtUtc,
+			lastBirthDateChangeAtUtc: row.lastBirthDateChangeAtUtc,
 			createdAt: row.createdAt,
 			updatedAt: row.updatedAt,
 		};

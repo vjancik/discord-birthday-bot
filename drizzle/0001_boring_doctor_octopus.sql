@@ -1,0 +1,1 @@
+ALTER TABLE `birthdays` ADD `last_birth_date_change_at_utc` integer;

@@ -10,6 +10,7 @@ import { formatAnnouncement } from "../../domain/well-wishes.ts";
 import type { AnnouncementPublisher } from "../ports/announcement-publisher.ts";
 import type { BirthdayRepository } from "../ports/birthday-repository.ts";
 import type { Clock } from "../ports/clock.ts";
+import type { MembershipChecker } from "../ports/membership-checker.ts";
 import type { RandomSource } from "../ports/random-source.ts";
 
 export class RunDueBirthdaysUseCase {
@@ -20,6 +21,7 @@ export class RunDueBirthdaysUseCase {
 		private readonly random: RandomSource,
 		private readonly logger: Logger,
 		private readonly timeoutMs: number,
+		private readonly membership?: MembershipChecker,
 	) {}
 
 	async execute(): Promise<void> {
@@ -30,6 +32,9 @@ export class RunDueBirthdaysUseCase {
 
 		try {
 			for (const record of due) {
+				// Stop processing if tick timeout has elapsed — prevents stale in-flight posts
+				if (abort.signal.aborted) break;
+
 				try {
 					await this.processRecord(record, now, abort.signal);
 				} catch (err) {
@@ -65,9 +70,37 @@ export class RunDueBirthdaysUseCase {
 		const nextTrigger = nextOccurrenceUtc(birthDate, timezone, now);
 
 		if (!this.shouldPost(birthDate, timezone, record.lastPostedAtUtc, now)) {
-			// Not the user's birthday or already posted — advance trigger so the row stops firing
+			// Not the user's birthday or already posted this year — advance trigger so the row stops firing
 			this.repo.reschedule(record.userId, nextTrigger, record.lastPostedAtUtc);
 			return;
+		}
+
+		if (this.membership !== undefined) {
+			let stillMember: boolean;
+			try {
+				stillMember = await this.membership.isMember(record.userId);
+			} catch (err) {
+				// Fail-closed: leave trigger unchanged so next tick retries
+				this.logger.warn(
+					{ err, userId: record.userId },
+					"Membership check failed; skipping this tick",
+				);
+				return;
+			}
+
+			if (!stillMember) {
+				// User left the guild: advance trigger but preserve lastPostedAtUtc so a rejoin still posts next year
+				this.repo.reschedule(
+					record.userId,
+					nextTrigger,
+					record.lastPostedAtUtc,
+				);
+				this.logger.info(
+					{ userId: record.userId },
+					"Skipped birthday: user left guild",
+				);
+				return;
+			}
 		}
 
 		const message = formatAnnouncement(record.userId, this.random);
@@ -88,16 +121,13 @@ export class RunDueBirthdaysUseCase {
 			return false;
 		}
 
-		// Double-post guard: skip if already posted today in user's local zone
+		// Once-per-calendar-year guard: skip if already posted this year in user's local zone
+		// (year check subsumes same-day check)
 		if (lastPostedAtUtc !== null) {
 			const zone = timezone.ianaId;
 			const lastPostedLocal = DateTime.fromMillis(lastPostedAtUtc, { zone });
 			const nowLocal = DateTime.fromMillis(now, { zone });
-			if (
-				lastPostedLocal.year === nowLocal.year &&
-				lastPostedLocal.month === nowLocal.month &&
-				lastPostedLocal.day === nowLocal.day
-			) {
+			if (lastPostedLocal.year === nowLocal.year) {
 				return false;
 			}
 		}
