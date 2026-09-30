@@ -140,7 +140,7 @@ export class BirthdayAddHandler {
 
 			const action = result.created ? "set" : "updated";
 			await submitInteraction.reply({
-				content: `Birthday ${action}! I'll post at noon (${timezone.ianaId}) on ${birthDate.format()} 🎂`,
+				content: `Birthday ${action}! I'll post at midnight (${timezone.ianaId}) on ${birthDate.format()} 🎂`,
 				flags: MessageFlags.Ephemeral,
 			});
 		} catch (err) {

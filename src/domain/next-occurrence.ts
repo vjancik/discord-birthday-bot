@@ -2,6 +2,9 @@ import { DateTime } from "luxon";
 import type { BirthDate } from "./birth-date.ts";
 import type { Timezone } from "./timezone.ts";
 
+// Local hour (in the user's timezone) at which the birthday announcement fires — midnight
+const TRIGGER_HOUR = 0;
+
 export function nextOccurrenceUtc(
 	birthDate: BirthDate,
 	timezone: Timezone,
@@ -32,7 +35,7 @@ export function nextOccurrenceUtc(
 				year: candidateYear,
 				month,
 				day,
-				hour: 12,
+				hour: TRIGGER_HOUR,
 				minute: 0,
 				second: 0,
 				millisecond: 0,
@@ -69,7 +72,7 @@ export function nextOccurrenceUtc(
 			year: fallbackYear,
 			month,
 			day,
-			hour: 12,
+			hour: TRIGGER_HOUR,
 			minute: 0,
 			second: 0,
 			millisecond: 0,

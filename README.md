@@ -1,6 +1,6 @@
 # Discord Birthday Bot
 
-A self-hosted Discord bot that lets server members register their birthday and timezone. At noon on their birthday — in their own local timezone, DST-correct across years — the bot posts a personalised birthday message in a configured channel. All data changes are audited to a separate log channel.
+A self-hosted Discord bot that lets server members register their birthday and timezone. At midnight on their birthday — in their own local timezone, DST-correct across years — the bot posts a personalised birthday message in a configured channel. All data changes are audited to a separate log channel.
 
 ## Features
 
@@ -8,7 +8,7 @@ A self-hosted Discord bot that lets server members register their birthday and t
   - Pre-populates the form with existing values when updating
   - Accepts city names (`Prague`), country names (`Germany`), or full IANA zone IDs (`Europe/Berlin`)
 - `/birthday_remove` — removes your birthday record, with a confirmation prompt
-- Birthday announcements posted at **noon in the user's local timezone**, DST-correct for every future year
+- Birthday announcements posted at **midnight in the user's local timezone**, DST-correct for every future year
 - Feb 29 birthdays are gracefully handled — announced on Feb 28 in non-leap years
 - Audit log channel receives a message on every add, update, remove, and bot lifecycle event
 - Abuse prevention: birth date changes are rate-limited to once every two weeks per user, and announcements fire at most once per calendar year regardless of reschedules

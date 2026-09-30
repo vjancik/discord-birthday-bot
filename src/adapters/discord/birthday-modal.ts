@@ -52,7 +52,7 @@ export function buildBirthdayModal(
 
 	const timezoneInput = new TextInputBuilder({
 		customId: MODAL_FIELD_TIMEZONE,
-		label: "Your timezone (posts at noon)",
+		label: "Your timezone (posts at midnight)",
 		style: TextInputStyle.Short,
 		placeholder:
 			"Major / Capital City or IANA zone — e.g. Prague or Europe/Prague",

@@ -94,10 +94,10 @@ function fixedClock(ms: number): Clock {
 	return { nowUtcMillis: () => ms };
 }
 
-// Prague noon on the given date
-function pragueNoon(year: number, month: number, day: number): number {
+// Prague midnight (start of day) on the given date
+function pragueMidnight(year: number, month: number, day: number): number {
 	return DateTime.fromObject(
-		{ year, month, day, hour: 12 },
+		{ year, month, day, hour: 0 },
 		{ zone: PRAGUE },
 	).toMillis();
 }
@@ -132,8 +132,8 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("posts birthday and reschedules when trigger is due and it's the same local day", async () => {
-		// Birthday: July 15. Trigger fires exactly at noon Prague time July 15, 2025.
-		const triggerMs = pragueNoon(2025, 7, 15);
+		// Birthday: July 15. Trigger fires exactly at midnight Prague time July 15, 2025.
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		// "now" is a few minutes after trigger
 		const now = triggerMs + 60_000;
 
@@ -167,7 +167,7 @@ describe("RunDueBirthdaysUseCase", () => {
 
 	test("skips post but still reschedules when trigger was missed (bot was down past midnight)", async () => {
 		// Birthday July 15 trigger, but "now" is July 16 in Prague
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = DateTime.fromObject(
 			{ year: 2025, month: 7, day: 16, hour: 9 },
 			{ zone: PRAGUE },
@@ -200,10 +200,10 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("once-per-year guard: skips post when already posted this year", async () => {
-		const now = pragueNoon(2025, 7, 15) + 60_000;
+		const now = pragueMidnight(2025, 7, 15) + 60_000;
 		const triggerMs = now - 120_000;
 		// Posted earlier today (same year in Prague)
-		const lastPostedThisYear = pragueNoon(2025, 7, 15) - 3_600_000;
+		const lastPostedThisYear = pragueMidnight(2025, 7, 15) - 3_600_000;
 
 		repo.seed(
 			makeRecord({
@@ -230,9 +230,9 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("once-per-year guard: posts when last posted was in a prior year", async () => {
-		const now = pragueNoon(2025, 7, 15) + 60_000;
+		const now = pragueMidnight(2025, 7, 15) + 60_000;
 		const triggerMs = now - 120_000;
-		const lastPostedPriorYear = pragueNoon(2024, 7, 15);
+		const lastPostedPriorYear = pragueMidnight(2024, 7, 15);
 
 		repo.seed(
 			makeRecord({
@@ -259,7 +259,7 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("does not reschedule when post fails (at-least-once: next tick can retry)", async () => {
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = triggerMs + 60_000;
 
 		repo.seed(
@@ -297,7 +297,7 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("abort signal: stops processing further records after tick timeout", async () => {
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = triggerMs + 60_000;
 
 		repo.seed(
@@ -346,9 +346,9 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("membership check: skips post and reschedules with old lastPosted when user left guild", async () => {
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = triggerMs + 60_000;
-		const oldLastPosted = pragueNoon(2024, 7, 15);
+		const oldLastPosted = pragueMidnight(2024, 7, 15);
 
 		repo.seed(
 			makeRecord({
@@ -384,7 +384,7 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("membership check: fail-closed on API error — no post, no reschedule", async () => {
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = triggerMs + 60_000;
 
 		repo.seed(
@@ -421,7 +421,7 @@ describe("RunDueBirthdaysUseCase", () => {
 	});
 
 	test("membership check: posts when user is still in guild", async () => {
-		const triggerMs = pragueNoon(2025, 7, 15);
+		const triggerMs = pragueMidnight(2025, 7, 15);
 		const now = triggerMs + 60_000;
 
 		repo.seed(

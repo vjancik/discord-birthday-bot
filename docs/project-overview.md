@@ -1,6 +1,6 @@
 # Birthday Bot — Project Overview
 
-A Discord bot that lets server members register their birthday and timezone. At noon in their chosen timezone on their birth date, the bot posts a personalised birthday message in a configured channel. All data changes are audited to a separate log channel.
+A Discord bot that lets server members register their birthday and timezone. At midnight in their chosen timezone on their birth date, the bot posts a personalised birthday message in a configured channel. All data changes are audited to a separate log channel.
 
 ---
 
@@ -80,7 +80,7 @@ The resolved value is always a canonical IANA zone string (e.g. `"Europe/Prague"
 
 **`next-occurrence.ts`** — two pure functions:
 
-- `nextOccurrenceUtc(birthDate, timezone, afterUtcMillis)` — returns the epoch-ms timestamp of the next noon local time in the given zone on the birthday date, strictly after `afterUtcMillis`. Tries the current year then next year; has a year+2 fallback for the edge case where `afterUtcMillis` is exactly equal to the trigger. Feb 29 in a non-leap year is silently adjusted to Feb 28.
+- `nextOccurrenceUtc(birthDate, timezone, afterUtcMillis)` — returns the epoch-ms timestamp of the next local midnight (start of day) in the given zone on the birthday date, strictly after `afterUtcMillis`. Tries the current year then next year; has a year+2 fallback for the edge case where `afterUtcMillis` is exactly equal to the trigger. Feb 29 in a non-leap year is silently adjusted to Feb 28.
 - `isSameBirthdayLocalDay(birthDate, timezone, utcMillis)` — returns `true` if the given UTC moment falls on the birthday's local calendar day in the given timezone. Used by the scheduler's catch-up policy. Feb 29 birthdays match local Feb 28 in non-leap years.
 
 **`well-wishes.ts`** — `WELL_WISHES` (10-entry `as const` tuple) and `formatAnnouncement(userId, random)`. The `RandomSource` port is injected so tests can use a deterministic stub instead of `Math.random()`.
@@ -250,7 +250,7 @@ discord.js's REST client handles per-bucket rate limiting natively (global 50/s,
 
 The core invariant is: **store IANA timezone IDs, compute UTC instants at the last possible moment using Luxon**.
 
-Storing a raw offset like `+01:00` would be wrong for Europe/Prague from late March to late October (when it becomes `+02:00`). Storing the IANA id and computing `DateTime.fromObject({ hour: 12 }, { zone: 'Europe/Prague' })` lets Luxon resolve the correct UTC instant for any future date, accounting for whatever DST rules apply in that year.
+Storing a raw offset like `+01:00` would be wrong for Europe/Prague from late March to late October (when it becomes `+02:00`). Storing the IANA id and computing `DateTime.fromObject({ hour: 0 }, { zone: 'Europe/Prague' })` lets Luxon resolve the correct UTC instant for any future date, accounting for whatever DST rules apply in that year.
 
 Concretely: for a user in `Europe/Prague`:
 - A birthday in January triggers at `11:00 UTC` (UTC+1 in winter).
@@ -361,9 +361,9 @@ The Discord interaction handlers are not unit-tested because they are tightly co
 
 ### Scheduling precision
 
-The scheduler polls every **30 seconds**, so a birthday message can arrive up to 30 seconds late relative to local noon. This is intentional — a bot process restart also executes an immediate tick, bounding late delivery at `restart_delay + 30s`.
+The scheduler polls every **30 seconds**, so a birthday message can arrive up to 30 seconds late relative to local midnight. This is intentional — a bot process restart also executes an immediate tick, bounding late delivery at `restart_delay + 30s`.
 
-Possible enhancement: reduce the interval to 10 seconds for near-exact noon delivery, or switch to a dynamic `setTimeout` computed from `nextOccurrenceUtc - Date.now()` when the next trigger is within a threshold (e.g. 5 minutes). The current polling approach is simpler, more restart-resilient, and the 30-second drift is imperceptible for a birthday greeting.
+Possible enhancement: reduce the interval to 10 seconds for near-exact midnight delivery, or switch to a dynamic `setTimeout` computed from `nextOccurrenceUtc - Date.now()` when the next trigger is within a threshold (e.g. 5 minutes). The current polling approach is simpler, more restart-resilient, and the 30-second drift is imperceptible for a birthday greeting.
 
 ### Single-process, single-file SQLite
 

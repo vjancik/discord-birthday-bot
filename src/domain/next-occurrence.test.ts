@@ -14,31 +14,31 @@ function utcMs(isoString: string): number {
 const prague = Timezone.resolve("Europe/Prague");
 
 describe("nextOccurrenceUtc", () => {
-	test("returns noon local time in winter (UTC+1)", () => {
+	test("returns midnight local time in winter (UTC+1)", () => {
 		const bd = BirthDate.parse("15.01.", null);
-		// After Jan 14, 2025 in Prague time → expect Jan 15, 2025 at noon Prague = 11:00 UTC
+		// After Jan 14, 2025 in Prague time → expect Jan 15, 2025 at midnight Prague = Jan 14 23:00 UTC
 		const after = utcMs("2025-01-14T12:00:00Z");
 		const result = nextOccurrenceUtc(bd, prague, after);
 		const resultLocal = DateTime.fromMillis(result, { zone: prague.ianaId });
 		expect(resultLocal.year).toBe(2025);
 		expect(resultLocal.month).toBe(1);
 		expect(resultLocal.day).toBe(15);
-		expect(resultLocal.hour).toBe(12);
-		expect(result).toBe(utcMs("2025-01-15T11:00:00Z"));
+		expect(resultLocal.hour).toBe(0);
+		expect(result).toBe(utcMs("2025-01-14T23:00:00Z"));
 	});
 
-	test("returns noon local time in summer (UTC+2)", () => {
+	test("returns midnight local time in summer (UTC+2)", () => {
 		const bd = BirthDate.parse("15.07.", null);
-		// After Jul 14, 2025 → expect Jul 15, 2025 at noon Prague = 10:00 UTC
+		// After Jul 14, 2025 → expect Jul 15, 2025 at midnight Prague = Jul 14 22:00 UTC
 		const after = utcMs("2025-07-14T12:00:00Z");
 		const result = nextOccurrenceUtc(bd, prague, after);
-		expect(result).toBe(utcMs("2025-07-15T10:00:00Z"));
+		expect(result).toBe(utcMs("2025-07-14T22:00:00Z"));
 	});
 
 	test("wraps to next year if birthday already passed this year", () => {
 		const bd = BirthDate.parse("15.01.", null);
-		// After Jan 15 noon Prague 2025 (i.e. trigger has already fired)
-		const after = utcMs("2025-01-15T12:00:00Z"); // that's 13:00 Prague = after noon
+		// After Jan 15 midnight Prague 2025 (i.e. trigger has already fired)
+		const after = utcMs("2025-01-15T12:00:00Z"); // that's 13:00 Prague = after midnight
 		const result = nextOccurrenceUtc(bd, prague, after);
 		const resultLocal = DateTime.fromMillis(result, { zone: prague.ianaId });
 		expect(resultLocal.year).toBe(2026);
@@ -70,7 +70,7 @@ describe("nextOccurrenceUtc", () => {
 	test("returns time strictly after afterUtcMillis (equal trigger → next year)", () => {
 		const bd = BirthDate.parse("15.01.", null);
 		// afterUtcMillis = exactly at the trigger moment
-		const triggerMs = utcMs("2025-01-15T11:00:00Z");
+		const triggerMs = utcMs("2025-01-14T23:00:00Z");
 		const result = nextOccurrenceUtc(bd, prague, triggerMs);
 		const resultLocal = DateTime.fromMillis(result, { zone: prague.ianaId });
 		expect(resultLocal.year).toBe(2026);
